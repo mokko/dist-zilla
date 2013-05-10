@@ -1,7 +1,11 @@
 use strict;
 use warnings;
+
 package Dist::Zilla::App::Command::listdeps;
 use Dist::Zilla::App -command;
+use Class::Inspector;
+
+
 # ABSTRACT: print your distribution's prerequisites
 
 =head1 SYNOPSIS
@@ -47,85 +51,93 @@ use Try::Tiny;
 sub abstract { "print your distribution's prerequisites" }
 
 sub opt_spec {
-  [ 'author', 'include author dependencies' ],
-  [ 'missing', 'list only the missing dependencies' ],
-  [ 'versions', 'include required version numbers in listing' ],
-  [ 'json', 'list dependencies by phase, in JSON format' ],
+    [ 'author',     'include author dependencies' ],
+      [ 'missing',  'list only the missing dependencies' ],
+      [ 'versions', 'include required version numbers in listing' ],
+      [ 'json',     'list dependencies by phase, in JSON format' ],
+      ;
 }
 
 sub prereqs {
-  my ($self, $zilla) = @_;
+    my ( $self, $zilla ) = @_;
 
-  $_->before_build for @{ $zilla->plugins_with(-BeforeBuild) };
-  $_->gather_files for @{ $zilla->plugins_with(-FileGatherer) };
-  $_->prune_files  for @{ $zilla->plugins_with(-FilePruner) };
-  $_->munge_files  for @{ $zilla->plugins_with(-FileMunger) };
-  $_->register_prereqs for @{ $zilla->plugins_with(-PrereqSource) };
+    $_->before_build     for @{ $zilla->plugins_with( -BeforeBuild ) };
+    $_->gather_files     for @{ $zilla->plugins_with( -FileGatherer ) };
+    $_->prune_files      for @{ $zilla->plugins_with( -FilePruner ) };
+    $_->munge_files      for @{ $zilla->plugins_with( -FileMunger ) };
+    $_->register_prereqs for @{ $zilla->plugins_with( -PrereqSource ) };
 
-  my $prereqs = $zilla->prereqs;
+    my $prereqs = $zilla->prereqs;
 }
 
 sub extract_dependencies {
-  my ($self, $zilla, $phases, $missing) = @_;
+    my ( $self, $zilla, $phases, $missing ) = @_;
 
-  my $prereqs = $self->prereqs($zilla);
+    my $prereqs = $self->prereqs($zilla);
 
-  require CPAN::Meta::Requirements;
-  my $req = CPAN::Meta::Requirements->new;
+    require CPAN::Meta::Requirements;
+    my $req = CPAN::Meta::Requirements->new;
 
-  for my $phase (@$phases) {
-    $req->add_requirements( $prereqs->requirements_for($phase, 'requires') );
-    $req->add_requirements( $prereqs->requirements_for($phase, 'recommends') );
-  }
+    for my $phase (@$phases) {
+        $req->add_requirements(
+            $prereqs->requirements_for( $phase, 'requires' ) );
+        $req->add_requirements(
+            $prereqs->requirements_for( $phase, 'recommends' ) );
+    }
 
-  require Class::Load;
+    require Class::Load;
 
-  my @required = grep { $_ ne 'perl' } $req->required_modules;
-  if ($missing) {
-    my $is_required = sub {
-      my $mod = shift;
-      # it is required if it's not already installed
-      return 1 unless Class::Load::try_load_class($mod);
+    my @required = grep { $_ ne 'perl' } $req->required_modules;
+    if ($missing) {
+        my $is_required = sub {
+            my $mod = shift;
+            # it is required if it's not already installed
+            return if Class::Inspector->loaded($mod);
+            print "M:$mod not loaded yet\n";
+            return 1 unless Class::Load::try_load_class($mod);
 
-      # guard against libs with -1 in $VERSION and other insanity
-      my $version;
-      return unless try { $version = $mod->VERSION; 1; };
+            # guard against libs with -1 in $VERSION and other insanity
+            my $version;
+            return unless try { $version = $mod->VERSION; 1; };
 
-      return !$req->accepts_module($mod => $version);
-    };
-    @required = grep { $is_required->($_) } @required;
-  }
+            return !$req->accepts_module( $mod => $version );
+        };
+        @required = grep { $is_required->($_) } @required;
+    }
 
-  my $versions = $req->as_string_hash;
-  return map { $_ => $versions->{$_} } @required;
+    my $versions = $req->as_string_hash;
+    return map { $_ => $versions->{$_} } @required;
 }
 
 sub execute {
-  my ($self, $opt, $arg) = @_;
+    my ( $self, $opt, $arg ) = @_;
 
-  $self->app->chrome->logger->mute;
+    $self->app->chrome->logger->mute;
 
-  my @phases = qw(build test configure runtime);
-  push @phases, 'develop' if $opt->author;
+    my @phases = qw(build test configure runtime);
+    push @phases, 'develop' if $opt->author;
 
-  if($opt->json) {
-    my $prereqs = $self->prereqs($self->zilla);
-    my $output = $prereqs->as_string_hash;
+    if ( $opt->json ) {
+        my $prereqs = $self->prereqs( $self->zilla );
+        my $output  = $prereqs->as_string_hash;
 
-    require JSON; JSON->VERSION(2);
-    print JSON->new->ascii(1)->canonical(1)->pretty->encode($output), "\n";
-    return 1;
-  }
-
-  my %modules = $self->extract_dependencies($self->zilla, \@phases, $opt->missing);
-
-  if($opt->versions) {
-    for(sort { lc $a cmp lc $b } keys %modules) {
-      print "$_ = ".$modules{$_}."\n";
+        require JSON;
+        JSON->VERSION(2);
+        print JSON->new->ascii(1)->canonical(1)->pretty->encode($output), "\n";
+        return 1;
     }
-  } else {
-      print "$_\n" for sort { lc $a cmp lc $b } keys(%modules);
-  }
+
+    my %modules =
+      $self->extract_dependencies( $self->zilla, \@phases, $opt->missing );
+
+    if ( $opt->versions ) {
+        for ( sort { lc $a cmp lc $b } keys %modules ) {
+            print "$_ = " . $modules{$_} . "\n";
+        }
+    }
+    else {
+        print "$_\n" for sort { lc $a cmp lc $b } keys(%modules);
+    }
 }
 
 1;
